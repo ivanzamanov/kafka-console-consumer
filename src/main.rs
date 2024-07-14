@@ -1,6 +1,7 @@
-use clap::{App, Arg};
-use env_logger::Env;
-use log::{info, warn};
+use std::env;
+
+use clap::{Arg, Command};
+use log::{debug, warn};
 
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer};
@@ -14,8 +15,7 @@ fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) {
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "true")
-        //.set("statistics.interval.ms", "30000")
-        //.set("auto.offset.reset", "smallest")
+        .set("auto.offset.reset", "latest")
         .set_log_level(RDKafkaLogLevel::Debug)
         .create()
         .expect("Consumer creation failed");
@@ -29,9 +29,10 @@ fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) {
             Some(poll_result) => match poll_result {
                 Ok(m) => {
                     match m.payload() {
-                        None => {},
+                        None => {}
                         Some(bytes) => {
                             let parsed = String::from_utf8(bytes.to_vec()).unwrap();
+                            // log::info!("{:}", parsed);
                             println!("{:}", parsed);
                             consumer.commit_message(&m, CommitMode::Async).unwrap();
                         }
@@ -45,51 +46,56 @@ fn consume_and_print(brokers: &str, group_id: &str, topics: &[&str]) {
 }
 
 fn main() {
-    let matches = App::new("consumer example")
+    let matches = Command::new("kafka-consumer")
         .version(option_env!("CARGO_PKG_VERSION").unwrap_or(""))
         .about("Simple command line consumer")
         .arg(
-            Arg::with_name("brokers")
-                .short("b")
+            Arg::new("brokers")
+                .short('b')
                 .long("brokers")
                 .help("Broker list in kafka format")
-                .takes_value(true)
+                .value_name("BOOTSTRAP_BROKERS")
                 .default_value("localhost:9092"),
         )
         .arg(
-            Arg::with_name("group-id")
-                .short("g")
+            Arg::new("group-id")
+                .short('g')
                 .long("group-id")
                 .help("Consumer group id")
-                .takes_value(true)
-                .default_value("example_consumer_group_id"),
+                .value_name("GROUP_ID")
+                .default_value("kafka-console-consumer"),
         )
         .arg(
-            Arg::with_name("log-conf")
-                .long("log-conf")
-                .help("Configure the logging format (example: 'rdkafka=trace')")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("topics")
-                .short("t")
+            Arg::new("topics")
+                .short('t')
                 .long("topics")
-                .help("Topic list")
-                .takes_value(true)
-                .multiple(true)
+                .help("Topic list.")
+                .value_name("TOPICS")
+                .num_args(1..)
                 .required(true),
         )
         .get_matches();
 
-    let env = Env::default();
-    env_logger::init_from_env(env);
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info");
+    }
 
-    let (version_n, version_s) = get_rdkafka_version();
-    info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
+    env_logger::init();
 
-    let topics = matches.values_of("topics").unwrap().collect::<Vec<&str>>();
-    let brokers = matches.value_of("brokers").unwrap();
-    let group_id = matches.value_of("group-id").unwrap();
+    let (_version_n, version_s) = get_rdkafka_version();
+    debug!("rd_kafka_version: {}", version_s);
 
-    consume_and_print(brokers, group_id, &topics);
+    let topics = matches
+        .get_many::<String>("topics")
+        .unwrap()
+        .map(|s| s.to_owned())
+        .collect::<Vec<String>>();
+    let brokers = matches.get_one::<String>("brokers").unwrap();
+    let group_id = matches.get_one::<String>("group-id").unwrap();
+
+    consume_and_print(
+        brokers,
+        group_id,
+        &topics.iter().map(|s| s.as_str()).collect::<Vec<&str>>(),
+    );
 }
